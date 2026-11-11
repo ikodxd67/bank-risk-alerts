@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/bank_risk_alerts.egg-info/PKG-INFO
+src/bank_risk_alerts.egg-info/SOURCES.txt
+src/bank_risk_alerts.egg-info/dependency_links.txt
+src/bank_risk_alerts.egg-info/entry_points.txt
+src/bank_risk_alerts.egg-info/requires.txt
+src/bank_risk_alerts.egg-info/top_level.txt
+src/bra/__init__.py
+src/bra/cli.py
+src/bra/db.py
+src/bra/generator.py
+src/bra/loader.py
+tests/test_generator.py
+tests/test_split_statements.py
