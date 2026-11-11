@@ -1,0 +1,22 @@
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: bra-oracle
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      SRC_PASSWORD: ${SRC_PASSWORD}
+      DWH_PASSWORD: ${DWH_PASSWORD}
+    volumes:
+      - oradata:/opt/oracle/oradata
+      # скрипты отрабатывают один раз, при первом создании базы
+      - ./docker/oracle/init:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+volumes:
+  oradata:
