@@ -37,6 +37,33 @@ All warehouse logic lives in Oracle; Python and (later) Airflow only call the pa
 Six months reconcile with the source to the last tiyn; a daily load takes 0.1–0.3 s.
 See [`docs/evidence/step-2-dwh.txt`](docs/evidence/step-2-dwh.txt) and `scripts/check_dwh.py`.
 
+## Marts and fraud rules (`pkg_marts`)
+
+| Object | What it does |
+|---|---|
+| `mart_daily_turnover` | turnover by day, channel and domestic/foreign; reconciles with the fact table |
+| `mart_trx_features` | per-transaction features from analytic windows over 31 days of facts: online count in 1 h, count in 24 h, purchase count and average purchase over the previous 30 days, "device seen before", previous country and minutes since previous transaction |
+| `fraud_rule` | rules are **rows, not code**: threshold, minimal history, on/off. Changing a threshold is an `UPDATE`, the next build picks it up and stores it next to each alert |
+| `fraud_alert` | one row per (transaction, rule) with the measured value and the threshold used |
+| `fraud_label` | chargebacks merged from the source as they arrive (1–14 days late) |
+| `mart_loan_dpd` | daily days-past-due snapshot per active loan, buckets `0 / 1-30 / 31-60 / 61-90 / 90+` |
+| `v_fraud_rule_quality`, `v_fraud_recall_by_type`, `v_dpd_buckets`, `v_dpd_roll_rate` | report views for dashboards and alerts |
+
+Rule quality is measured only on days with a full 30-day feature history and with
+chargebacks old enough to have arrived (from [`docs/evidence/step-3-marts.txt`](docs/evidence/step-3-marts.txt)):
+
+| Rule | Alerts | Precision | Recall |
+|---|---|---|---|
+| VELOCITY_1H | 2030 | 0.885 | 0.474 |
+| AMOUNT_30D | 856 | 0.248 | 0.056 |
+| GEO_SWITCH | 595 | 0.331 | 0.052 |
+| NIGHT_P2P_NEW_DEVICE | 382 | 0.448 | 0.045 |
+| any rule | 3807 | 0.611 | 0.614 |
+
+Recall by fraud card-day is 1.0 for VELOCITY and GEO, 0.99 for ATO and 0.74 for AMOUNT
+(cards with fewer than 3 purchases in 30 days have no baseline). The DPD snapshot is checked
+loan by loan against an independent Python calculation in `tests/test_marts.py`.
+
 ## Run
 
 ```bash
@@ -48,8 +75,10 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/bra generate --start 2026-05-01 --end 2026-10-31
 .venv/Scripts/bra stats
 .venv/Scripts/bra migrate dwh
-.venv/Scripts/bra load --start 2026-05-01 --end 2026-10-31
+.venv/Scripts/bra load --start 2024-05-01 --end 2026-10-31   # loan history starts in 2024
+.venv/Scripts/bra marts --start 2026-05-01 --end 2026-10-31
 .venv/Scripts/python scripts/check_dwh.py
+.venv/Scripts/python scripts/check_marts.py
 .venv/Scripts/pytest                      # integration tests need the running Oracle
 ```
 

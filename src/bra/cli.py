@@ -24,6 +24,9 @@ def main(argv: list[str] | None = None) -> None:
     ld = sub.add_parser("load", help="хранилище: pkg_dds.run_day за дни [start, end]")
     ld.add_argument("--start", type=date.fromisoformat, required=True)
     ld.add_argument("--end", type=date.fromisoformat)
+    mt = sub.add_parser("marts", help="витрины: pkg_marts.run_day за дни [start, end]")
+    mt.add_argument("--start", type=date.fromisoformat, required=True)
+    mt.add_argument("--end", type=date.fromisoformat)
     rm = sub.add_parser("reload-month", help="хранилище: пересобрать месяц обменом партиций")
     rm.add_argument("month", type=date.fromisoformat, help="любая дата месяца, например 2026-06-01")
     args = p.parse_args(argv)
@@ -46,13 +49,14 @@ def main(argv: list[str] | None = None) -> None:
                 counts = loader.load_day(conn, bank, day)
                 print(day, counts, f"{time.perf_counter() - t:.1f} с", flush=True)
                 day += timedelta(days=1)
-    elif args.cmd == "load":
+    elif args.cmd in ("load", "marts"):
+        proc = "pkg_dds.run_day" if args.cmd == "load" else "pkg_marts.run_day"
         day, end = args.start, args.end or args.start
         with db.connect("dwh") as conn:
             cur = conn.cursor()
             while day <= end:
                 t = time.perf_counter()
-                cur.callproc("pkg_dds.run_day", [day])
+                cur.callproc(proc, [day])
                 print(day, f"{time.perf_counter() - t:.1f} с", flush=True)
                 day += timedelta(days=1)
     elif args.cmd == "reload-month":

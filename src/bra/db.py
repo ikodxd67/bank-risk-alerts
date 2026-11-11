@@ -93,7 +93,10 @@ def migrate(conn: oracledb.Connection, folder: Path) -> list[str]:
 
 def _run_file(cur: oracledb.Cursor, path: Path) -> None:
     for stmt in split_statements(path.read_text(encoding="utf-8")):
-        cur.execute(stmt)
+        try:
+            cur.execute(stmt)
+        except oracledb.DatabaseError as e:
+            raise RuntimeError(f"{path.name}: {e}\n{stmt[:300]}") from e
         if warning := cur.warning:  # PL/SQL с ошибкой компиляции создаётся «успешно», с предупреждением
             errors = cur.execute(
                 "SELECT name || ' ' || line || ':' || position || ' ' || text FROM user_errors"

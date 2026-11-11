@@ -1,12 +1,16 @@
 CREATE OR REPLACE PACKAGE pkg_dds AS
-    -- Измерения на дату p_date: продавцы и карты (SCD1), клиенты (SCD2).
-    -- Только вперёд: дата раньше последней версии клиента — ошибка -20002.
+    -- Измерения на дату p_date: продавцы, карты, кредиты (SCD1) и график новых
+    -- кредитов, клиенты (SCD2). Только вперёд: дата раньше последней версии
+    -- клиента — ошибка -20002.
     PROCEDURE load_dims(p_date IN DATE);
 
     -- Операции одного дня: DELETE + INSERT в одной транзакции (идемпотентно).
     PROCEDURE load_transactions(p_date IN DATE);
 
-    -- Ежедневный запуск: сначала измерения, потом операции.
+    -- Платежи по кредитам за день: так же, DELETE + INSERT.
+    PROCEDURE load_payments(p_date IN DATE);
+
+    -- Ежедневный запуск: измерения, операции, платежи.
     PROCEDURE run_day(p_date IN DATE);
 
     -- Пересборка месяца целиком через обмен партиций: данные собираются в
@@ -59,6 +63,32 @@ CREATE OR REPLACE PACKAGE BODY pkg_dds AS
             WHERE d.client_id <> s.client_id OR d.card_type <> s.card_type OR d.opened_at <> s.opened_at
         WHEN NOT MATCHED THEN INSERT (card_id, client_id, card_type, opened_at)
             VALUES (s.card_id, s.client_id, s.card_type, s.opened_at);
+        l_rows := l_rows + SQL%ROWCOUNT;
+
+        MERGE INTO dim_loan d
+        USING src.loans s
+        ON (d.loan_id = s.loan_id)
+        WHEN MATCHED THEN UPDATE
+            SET d.client_id = s.client_id, d.issued_on = s.issued_on, d.principal = s.principal,
+                d.term_months = s.term_months, d.monthly_payment = s.monthly_payment
+            WHERE d.client_id <> s.client_id OR d.issued_on <> s.issued_on OR d.principal <> s.principal
+               OR d.term_months <> s.term_months OR d.monthly_payment <> s.monthly_payment
+        WHEN NOT MATCHED THEN INSERT (loan_id, client_id, issued_on, principal, term_months, monthly_payment)
+            VALUES (s.loan_id, s.client_id, s.issued_on, s.principal, s.term_months, s.monthly_payment);
+        l_rows := l_rows + SQL%ROWCOUNT;
+
+        -- График строится один раз на новый кредит. Взнос k — в тот же день через k
+        -- месяцев, в коротком месяце — в последний день. ADD_MONTHS от самого дня
+        -- выдачи не годится: от 28 февраля он даёт 31 марта.
+        -- shortcut: условия договора считаются неизменными; изменятся — график не пересчитается.
+        INSERT INTO loan_schedule (loan_id, installment_no, due_date, amount)
+        SELECT l.loan_id, n.k,
+               LEAST(ADD_MONTHS(TRUNC(l.issued_on, 'MM'), n.k) + (EXTRACT(DAY FROM l.issued_on) - 1),
+                     LAST_DAY(ADD_MONTHS(TRUNC(l.issued_on, 'MM'), n.k))),
+               l.monthly_payment
+        FROM dim_loan l
+        JOIN (SELECT LEVEL AS k FROM dual CONNECT BY LEVEL <= 600) n ON n.k <= l.term_months
+        WHERE NOT EXISTS (SELECT 1 FROM loan_schedule s WHERE s.loan_id = l.loan_id);
         l_rows := l_rows + SQL%ROWCOUNT;
 
         -- SCD2, шаг 1. Версия уже открыта сегодня (второе изменение за день) —
@@ -131,10 +161,33 @@ CREATE OR REPLACE PACKAGE BODY pkg_dds AS
             RAISE;
     END load_transactions;
 
+    PROCEDURE load_payments(p_date IN DATE) IS
+        l_log  NUMBER := pkg_log.start_step('load_payments', p_date);
+        l_rows NUMBER;
+    BEGIN
+        check_date(p_date);
+
+        DELETE FROM fct_loan_payment WHERE paid_on = p_date;
+        INSERT INTO fct_loan_payment (payment_id, loan_id, paid_on, amount)
+        SELECT payment_id, loan_id, paid_on, amount
+        FROM src.loan_payments
+        WHERE paid_on = p_date;
+        l_rows := SQL%ROWCOUNT;
+
+        COMMIT;
+        pkg_log.ok(l_log, l_rows);
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            pkg_log.fail(l_log, SQLERRM || CHR(10) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE);
+            RAISE;
+    END load_payments;
+
     PROCEDURE run_day(p_date IN DATE) IS
     BEGIN
         load_dims(p_date);
         load_transactions(p_date);
+        load_payments(p_date);
     END run_day;
 
     PROCEDURE reload_month(p_month IN DATE) IS
