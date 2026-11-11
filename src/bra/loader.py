@@ -53,6 +53,47 @@ def init(conn: oracledb.Connection, bank: Bank) -> None:
     conn.commit()
 
 
+HISTORY_LAST_STATE_DIFF = """
+SELECT COUNT(*) FROM (
+    (SELECT client_id, full_name, birth_date, city, segment, changed_at FROM (
+         SELECT h.*, ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY changed_at DESC, hist_id DESC) AS rn
+         FROM client_history h)
+     WHERE rn = 1
+     MINUS
+     SELECT client_id, full_name, birth_date, city, segment, updated_at FROM clients)
+    UNION ALL
+    (SELECT client_id, full_name, birth_date, city, segment, updated_at FROM clients
+     MINUS
+     SELECT client_id, full_name, birth_date, city, segment, changed_at FROM (
+         SELECT h.*, ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY changed_at DESC, hist_id DESC) AS rn
+         FROM client_history h)
+     WHERE rn = 1))"""
+
+
+def backfill_client_history(conn: oracledb.Connection, bank: Bank, end: date) -> int:
+    """Журнал клиентов для базы, заполненной до появления триггера (002_client_history).
+    Генератор детерминирован, поэтому изменения за прошлые дни восстанавливаются точно.
+    Проверка: последнее состояние каждого клиента в журнале = строка в clients."""
+    cur = conn.cursor()
+    (count,) = cur.execute("SELECT COUNT(*) FROM client_history").fetchone()
+    if count:
+        raise SystemExit("журнал уже заполнен")
+    rows = [(cid, name, birth, city, seg, reg) for cid, name, birth, city, seg, reg, _ in bank.clients]
+    names = {cid: (name, birth) for cid, name, birth, *_ in rows}
+    day = bank.cfg.start
+    while day <= end:
+        rows += [(cid, *names[cid], city, seg, upd) for city, seg, upd, cid in bank.client_updates(day)]
+        day += timedelta(days=1)
+    _many(cur, "INSERT INTO client_history (client_id, full_name, birth_date, city, segment, changed_at)"
+               " VALUES (:1, :2, :3, :4, :5, :6)", rows)   # порядок строк = порядок hist_id
+    (diff,) = cur.execute(HISTORY_LAST_STATE_DIFF).fetchone()
+    if diff:
+        conn.rollback()
+        raise SystemExit(f"журнал не сходится с clients: {diff} строк расходятся, ничего не записано")
+    conn.commit()
+    return len(rows)
+
+
 def load_day(conn: oracledb.Connection, bank: Bank, day: date) -> dict[str, int]:
     """Один день источника одной транзакцией. Повторный запуск даёт то же самое."""
     cur = conn.cursor()
@@ -70,7 +111,9 @@ def load_day(conn: oracledb.Connection, bank: Bank, day: date) -> dict[str, int]
     _many(cur, INSERT["fraud_reports"], reports)
     _many(cur, INSERT_LOAN, _loan_rows(loans))
     _many(cur, INSERT["loan_payments"], payments)
-    _many(cur, "UPDATE clients SET city = :1, segment = :2, updated_at = :3 WHERE client_id = :4", updates)
+    # перегенерация старого дня не должна откатывать клиента: изменение старше текущего — пропускаем
+    _many(cur, "UPDATE clients SET city = :1, segment = :2, updated_at = :3"
+               " WHERE client_id = :4 AND updated_at <= :5", [(*u, u[2]) for u in updates])
     conn.commit()
     return {"transactions": len(trx), "fraud_reports": len(reports), "loans": len(loans),
             "loan_payments": len(payments), "client_updates": len(updates)}

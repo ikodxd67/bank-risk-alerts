@@ -9,7 +9,8 @@ from pathlib import Path
 import oracledb
 import pytest
 
-from bra import db
+from bra import db, loader
+from bra.generator import Bank
 
 db.load_env()
 try:
@@ -85,10 +86,12 @@ def client_1(src, dwh):
     """Клиент 1: запоминаем источник и все версии в измерении, после теста возвращаем."""
     s, d = src.cursor(), dwh.cursor()
     src_row = s.execute("SELECT city, segment, updated_at FROM clients WHERE client_id = 1").fetchone()
+    (hist_max,) = s.execute("SELECT MAX(hist_id) FROM client_history").fetchone()
     versions = d.execute("SELECT client_sk, client_id, full_name, birth_date, city, segment,"
                          " valid_from, valid_to FROM dim_client WHERE client_id = 1").fetchall()
     yield 1
     s.execute("UPDATE clients SET city = :1, segment = :2, updated_at = :3 WHERE client_id = 1", src_row)
+    s.execute("DELETE FROM client_history WHERE hist_id > :1", [hist_max])   # и строки триггера от теста
     src.commit()
     d.execute("DELETE FROM dim_client WHERE client_id = 1")
     d.executemany("INSERT INTO dim_client (client_sk, client_id, full_name, birth_date, city, segment,"
@@ -140,6 +143,43 @@ def test_scd2(src, dwh, client_1):
 
 
 BAD_CARD, BAD_TRX = 999_999_999_999, 20260715700000
+
+
+def test_client_versions_match_generator(dwh):
+    """История клиентов, посчитанная заново на Python по генератору: на конец каждого дня
+    берём состояние клиента, новая версия — когда оно отличается от прошлого. Должна
+    совпасть с dim_client по каждому клиенту и дню (хранилище журнал не видит напрямую)."""
+    cur = dwh.cursor()
+    (last,) = cur.execute("SELECT MAX(trx_date) FROM fct_transactions").fetchone()
+    bank = Bank()
+    current = {cid: (city, seg) for cid, _, _, city, seg, _, _ in bank.clients}
+    expected = {(cid, city, seg, FIRST) for cid, (city, seg) in current.items()}
+    day = bank.cfg.start
+    while day <= last.date():
+        end_of_day = {cid: (city, seg) for city, seg, _, cid in bank.client_updates(day)}  # последнее за день
+        for cid, state in end_of_day.items():
+            if state != current[cid]:
+                current[cid] = state
+                expected.add((cid, *state, datetime.combine(day, datetime.min.time())))
+        day += timedelta(days=1)
+    actual = set(cur.execute("SELECT client_id, city, segment, valid_from FROM dim_client"
+                             " WHERE valid_from <= :d", d=last))
+    assert len(expected) > 50_000 + 5_000
+    assert actual == expected
+
+
+def test_regenerating_old_day_keeps_clients(src):
+    """Перегенерация старого дня не откатывает клиентов к его изменениям (раньше откатывала)."""
+    s = src.cursor()
+    snapshot = "SELECT client_id, city, segment, updated_at FROM clients ORDER BY client_id"
+    before = s.execute(snapshot).fetchall()
+    (hist_max,) = s.execute("SELECT MAX(hist_id) FROM client_history").fetchone()
+    try:
+        loader.load_day(src, Bank(), LOADED_DAY)
+        assert s.execute(snapshot).fetchall() == before
+    finally:
+        s.execute("DELETE FROM client_history WHERE hist_id > :1", [hist_max])  # повтор того же дня = те же строки
+        src.commit()
 
 
 def test_failed_load_keeps_the_day_and_logs_error(src, dwh):

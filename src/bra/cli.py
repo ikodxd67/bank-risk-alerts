@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--start", type=date.fromisoformat, default=Config.start)
     g.add_argument("--end", type=date.fromisoformat)
     sub.add_parser("stats", help="сводка по src")
+    sub.add_parser("backfill-history", help="восстановить src.client_history по генератору (база до триггера)")
     ld = sub.add_parser("load", help="хранилище: pkg_dds.run_day за дни [start, end]")
     ld.add_argument("--start", type=date.fromisoformat, required=True)
     ld.add_argument("--end", type=date.fromisoformat)
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> None:
     mt.add_argument("--end", type=date.fromisoformat)
     rm = sub.add_parser("reload-month", help="хранилище: пересобрать месяц обменом партиций")
     rm.add_argument("month", type=date.fromisoformat, help="любая дата месяца, например 2026-06-01")
+    sub.add_parser("rebuild-clients", help="хранилище: пересобрать dim_client по журналу и перевязать факт")
     args = p.parse_args(argv)
 
     db.load_env()
@@ -49,6 +51,11 @@ def main(argv: list[str] | None = None) -> None:
                 counts = loader.load_day(conn, bank, day)
                 print(day, counts, f"{time.perf_counter() - t:.1f} с", flush=True)
                 day += timedelta(days=1)
+    elif args.cmd == "backfill-history":
+        with db.connect("src") as conn:
+            (end,) = conn.cursor().execute("SELECT TRUNC(MAX(trx_ts)) FROM transactions").fetchone()
+            n = loader.backfill_client_history(conn, Bank(), end.date())
+        print(f"журнал клиентов: {n} строк по {end:%Y-%m-%d}, последнее состояние = clients")
     elif args.cmd in ("load", "marts"):
         proc = "pkg_dds.run_day" if args.cmd == "load" else "pkg_marts.run_day"
         day, end = args.start, args.end or args.start
@@ -59,6 +66,13 @@ def main(argv: list[str] | None = None) -> None:
                 cur.callproc(proc, [day])
                 print(day, f"{time.perf_counter() - t:.1f} с", flush=True)
                 day += timedelta(days=1)
+    elif args.cmd == "rebuild-clients":
+        with db.connect("dwh") as conn:
+            cur = conn.cursor()
+            (last,) = cur.execute("SELECT MAX(trx_date) FROM fct_transactions").fetchone()
+            t = time.perf_counter()
+            cur.callproc("pkg_dds.rebuild_clients", [last])
+        print(f"dim_client пересобран по {last:%Y-%m-%d}, факт перевязан: {time.perf_counter() - t:.0f} с")
     elif args.cmd == "reload-month":
         with db.connect("dwh") as conn:
             conn.cursor().callproc("pkg_dds.reload_month", [args.month])

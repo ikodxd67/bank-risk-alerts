@@ -1,7 +1,7 @@
 CREATE OR REPLACE PACKAGE pkg_dds AS
     -- Измерения на дату p_date: продавцы, карты, кредиты (SCD1) и график новых
-    -- кредитов, клиенты (SCD2). Только вперёд: дата раньше последней версии
-    -- клиента — ошибка -20002.
+    -- кредитов, клиенты (SCD2) — состояние клиента на p_date из журнала
+    -- src.client_history. Только вперёд: дата раньше последней версии — ошибка -20002.
     PROCEDURE load_dims(p_date IN DATE);
 
     -- Операции одного дня: DELETE + INSERT в одной транзакции (идемпотентно).
@@ -16,6 +16,10 @@ CREATE OR REPLACE PACKAGE pkg_dds AS
     -- Пересборка месяца целиком через обмен партиций: данные собираются в
     -- отдельной таблице, потом подменяют партицию одной операцией словаря.
     PROCEDURE reload_month(p_month IN DATE);
+
+    -- Пересобрать dim_client по журналу до p_to включительно и перевязать факт
+    -- на новые версии (reload_month по всем месяцам). Ремонтная процедура: DAG на паузу.
+    PROCEDURE rebuild_clients(p_to IN DATE);
 END pkg_dds;
 /
 
@@ -94,7 +98,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_dds AS
         -- SCD2, шаг 1. Версия уже открыта сегодня (второе изменение за день) —
         -- правим её на месте, иначе получится версия нулевой длины.
         MERGE INTO dim_client d
-        USING src.clients s
+        USING (SELECT * FROM v_client_asof WHERE p_date >= state_from AND p_date < state_to) s
         ON (d.client_id = s.client_id AND d.valid_to = c_open AND d.valid_from = p_date)
         WHEN MATCHED THEN UPDATE
             SET d.full_name = s.full_name, d.birth_date = s.birth_date,
@@ -110,7 +114,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_dds AS
         WHERE d.valid_to = c_open
           AND d.valid_from < p_date
           AND EXISTS (
-              SELECT 1 FROM src.clients s
+              SELECT 1 FROM (SELECT * FROM v_client_asof WHERE p_date >= state_from AND p_date < state_to) s
               WHERE s.client_id = d.client_id
                 AND (s.full_name <> d.full_name OR s.birth_date <> d.birth_date
                      OR s.city <> d.city OR s.segment <> d.segment));
@@ -122,7 +126,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_dds AS
                CASE WHEN EXISTS (SELECT 1 FROM dim_client x WHERE x.client_id = s.client_id)
                     THEN p_date ELSE c_first END,
                c_open
-        FROM src.clients s
+        FROM (SELECT * FROM v_client_asof WHERE p_date >= state_from AND p_date < state_to) s
         WHERE NOT EXISTS (
             SELECT 1 FROM dim_client d WHERE d.client_id = s.client_id AND d.valid_to = c_open);
         l_rows := l_rows + SQL%ROWCOUNT;
@@ -227,6 +231,39 @@ CREATE OR REPLACE PACKAGE BODY pkg_dds AS
             pkg_log.fail(l_log, SQLERRM || CHR(10) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE);
             RAISE;
     END reload_month;
+
+    PROCEDURE rebuild_clients(p_to IN DATE) IS
+        l_log   NUMBER := pkg_log.start_step('rebuild_clients', p_to);
+        l_first DATE;
+    BEGIN
+        check_date(p_to);
+        DELETE FROM dim_client;
+        COMMIT;
+        -- Дни, когда клиент менялся (первая строка журнала — регистрация, не изменение).
+        -- Достаточно прогнать load_dims только по ним: в остальные дни SCD2 ничего не делает.
+        SELECT MIN(changed_at) - 1 INTO l_first
+        FROM (SELECT changed_at, ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY changed_at, hist_id) AS rn
+              FROM src.client_history)
+        WHERE rn > 1 AND changed_at <= p_to;
+        load_dims(NVL(l_first, p_to));          -- все клиенты в состоянии до первого изменения
+        FOR d IN (SELECT DISTINCT changed_at AS day
+                  FROM (SELECT changed_at, ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY changed_at, hist_id) AS rn
+                        FROM src.client_history)
+                  WHERE rn > 1 AND changed_at <= p_to
+                  ORDER BY 1) LOOP
+            load_dims(d.day);
+        END LOOP;
+        -- client_sk у всех версий новые — перевязываем весь факт
+        FOR m IN (SELECT DISTINCT TRUNC(trx_date, 'MM') AS month FROM fct_transactions ORDER BY 1) LOOP
+            reload_month(m.month);
+        END LOOP;
+        pkg_log.ok(l_log, NULL);
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            pkg_log.fail(l_log, SQLERRM || CHR(10) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE);
+            RAISE;
+    END rebuild_clients;
 
 END pkg_dds;
 /

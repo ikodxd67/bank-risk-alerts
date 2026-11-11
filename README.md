@@ -29,7 +29,8 @@ All warehouse logic lives in Oracle; Python and (later) Airflow only call the pa
 | Object | What it does |
 |---|---|
 | `pkg_log` + `etl_log` | load journal written in autonomous transactions, so a failed load still leaves `ERROR` with the message and the package line |
-| `pkg_dds.load_dims` | `dim_card`, `dim_merchant` via `MERGE` (SCD1); `dim_client` as SCD2 in `[valid_from, valid_to)` versions; forward-only |
+| `pkg_dds.load_dims` | `dim_card`, `dim_merchant` via `MERGE` (SCD1); `dim_client` as SCD2 in `[valid_from, valid_to)` versions, built from the client state **as of the load date** (`src.client_history`, an audit table filled by a trigger on `clients`); forward-only |
+| `pkg_dds.rebuild_clients` | rebuilds `dim_client` from the audit table and re-points the fact to the new versions via `reload_month` |
 | `pkg_dds.load_transactions` | one day of `fct_transactions`: `DELETE` + `INSERT` in one transaction, idempotent; point-in-time `client_sk`; an unknown card fails the load instead of being dropped by a join |
 | `pkg_dds.reload_month` | rebuilds a month by partition exchange (`CREATE TABLE ... FOR EXCHANGE`, `EXCHANGE PARTITION`) |
 | `fct_transactions` | monthly interval partitions; a one-day query reads one partition |
