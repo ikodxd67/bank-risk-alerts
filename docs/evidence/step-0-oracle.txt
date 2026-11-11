@@ -1,0 +1,26 @@
+# Step 0 — Oracle Free is up (captured 2026-11-11 18:35    )
+
+$ docker ps --filter name=bra-oracle
+IMAGE                        STATUS                   PORTS
+gvenzl/oracle-free:23-slim   Up 3 minutes (healthy)   0.0.0.0:1521->1521/tcp, [::]:1521->1521/tcp
+
+$ sqlplus src@localhost:1521/FREEPDB1
+
+Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free
+Version 23.26.3.0.0
+
+
+user=SRC, con=FREEPDB1, dual=X
+
+privs: CREATE SEQUENCE, CREATE SESSION, CREATE TABLE, CREATE VIEW
+
+$ sqlplus dwh@localhost:1521/FREEPDB1
+
+Oracle AI Database 26ai Free Release 23.26.3.0.0 - Develop, Learn, and Run for Free
+Version 23.26.3.0.0
+
+
+user=DWH, con=FREEPDB1, dual=X
+
+privs: CREATE MATERIALIZED VIEW, CREATE PROCEDURE, CREATE SEQUENCE, CREATE SESSION, CREATE TABLE, CREATE TYPE, CREATE VIEW
+
