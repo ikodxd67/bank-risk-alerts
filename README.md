@@ -85,6 +85,22 @@ then all fraud rules were switched off on purpose, the marts rebuild for 2026-11
 
 ![Airflow runs](docs/img/airflow-backfill-green.png)
 
+## Performance
+
+[`docs/performance.md`](docs/performance.md) has the measurements for one month (672 860 rows),
+taken from `v$mystat` and actual plans:
+
+| Method | Time | SQL executions | Redo |
+|---|---|---|---|
+| Row by row | 11.9 s | 672 865 | 233 MB |
+| `BULK COLLECT` + `FORALL` | 3.4 s | 678 | 64 MB |
+| One `INSERT ... SELECT` | 2.6 s | 13 | 63 MB |
+| One `INSERT /*+ APPEND */ ... SELECT` | 1.3 s | 155 | 0.2 MB |
+
+It also covers plans before and after:
+- a function on an indexed column, and why the optimizer skips the index anyway (clustering factor);
+- a function on the partition key: `PARTITION RANGE ALL` vs `SINGLE`, 26× slower.
+
 ## Run
 
 ```bash
@@ -100,6 +116,7 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/bra marts --start 2026-05-01 --end 2026-10-31
 .venv/Scripts/python scripts/check_dwh.py
 .venv/Scripts/python scripts/check_marts.py
+.venv/Scripts/python scripts/perf.py      # measurements for docs/performance.md (~2 min)
 .venv/Scripts/pytest                      # integration tests need the running Oracle
 docker compose up -d                      # + Airflow on http://localhost:8080 (no login, local only)
 docker exec bra-airflow airflow backfill create --dag-id bank_daily     --from-date 2026-11-01 --to-date 2026-11-07 --max-active-runs 1 --reprocess-behavior failed

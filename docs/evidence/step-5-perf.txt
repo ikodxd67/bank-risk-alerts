@@ -1,0 +1,190 @@
+# Шаг 5: замеры. Oracle Free 26ai (23.26.3) в Docker на ноутбуке, NOARCHIVELOG. Данные сгенерированы.
+
+-- один день 2026-07-15, медиана из 3 запусков
+   способ              строк     сек  SQL-вызовов  fetch курсора  redo, МБ  CPU, с  logical reads   (все 3 запуска, с)
+   row_by_row          20171    0.37        20176            202       7.0    0.28          45478   (0.23 / 0.37 / 0.43)
+   bulk_forall         20171    0.09           26             21       1.9    0.08          24656   (0.08 / 0.09 / 0.22)
+   one_sql             20171    0.23           13              0       1.9    0.23          36734   (0.22 / 0.23 / 0.24)
+   one_sql_append      20171    0.27          155              0       0.1    0.25          34662   (0.26 / 0.27 / 0.27)
+
+-- месяц 2026-07, медиана из 3 запусков
+   способ              строк     сек  SQL-вызовов  fetch курсора  redo, МБ  CPU, с  logical reads   (все 3 запуска, с)
+   row_by_row         672860   11.92       672865           6729     233.3    7.06        1439482   (11.75 / 11.92 / 12.26)
+   bulk_forall        672860    3.35          678            673      63.5    2.07         746981   (3.29 / 3.35 / 3.65)
+   one_sql            672860    2.57           13              0      63.3    0.77         106435   (2.10 / 2.57 / 2.75)
+   one_sql_append     672860    1.26          155              0       0.2    1.11          44725   (1.18 / 1.26 / 1.32)
+
+-- почему оптимизатор не берёт индекс по trx_ts: clustering factor ≈ числу строк, а не блоков
+   индекс, clustering_factor, строк в индексе; блоков таблицы
+   SYS_C008746 42814 4353598 32537
+   IX_TRANSACTIONS_TS 4219150 4244815 32537
+
+-- время запроса (второй запуск, кэш прогрет), сек
+   perf_a1 0.564  результат (20171, 265673333.58)  — функция на индексированной колонке: TRUNC(trx_ts) = день
+   perf_a2 0.122  результат (20171, 265673333.58)  — та же выборка диапазоном: trx_ts >= день AND trx_ts < день + 1
+   perf_a3 0.012  результат (20171, 265673333.58)  — тот же диапазон, индекс навязан хинтом (оптимизатор сам выбрал полный просмотр)
+   perf_b1 0.552  результат (20171, 265673333.58)  — функция на ключе партиционирования: TO_CHAR(trx_date) = строка
+   perf_b2 0.021  результат (20171, 265673333.58)  — сам ключ: trx_date = день
+
+-- план perf_a1: функция на индексированной колонке: TRUNC(trx_ts) = день
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_a1, SUM(amount) FROM src.transactions WHERE TRUNC(trx_ts) = DATE '2026-07-15'
+   SQL_ID  3gj28w9dt8bfn, child number 1
+   -------------------------------------
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_a1, SUM(amount) 
+   FROM src.transactions WHERE TRUNC(trx_ts) = DATE '2026-07-15'
+    
+   Plan hash value: 4088813652
+    
+   ---------------------------------------------------------------------------------------------
+   | Id  | Operation          | Name         | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+   ---------------------------------------------------------------------------------------------
+   |   0 | SELECT STATEMENT   |              |      1 |        |      1 |00:00:00.56 |   32304 |
+   |   1 |  SORT AGGREGATE    |              |      1 |      1 |      1 |00:00:00.56 |   32304 |
+   |*  2 |   TABLE ACCESS FULL| TRANSACTIONS |      1 |  20171 |  20171 |00:00:00.24 |   32304 |
+   ---------------------------------------------------------------------------------------------
+    
+   Predicate Information (identified by operation id):
+   ---------------------------------------------------
+    
+      2 - filter(TRUNC(INTERNAL_FUNCTION("TRX_TS"))=TO_DATE(' 2026-07-15 00:00:00', 
+                 'syyyy-mm-dd hh24:mi:ss'))
+    
+   Note
+   -----
+      - statistics feedback used for this statement
+    
+
+-- план perf_a2: та же выборка диапазоном: trx_ts >= день AND trx_ts < день + 1
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_a2, SUM(amount) FROM src.transactions WHERE trx_ts >= DATE '2026-07-15' AND trx_ts < DATE '2026-07-16'
+   SQL_ID  9kzhdgg71hktz, child number 0
+   -------------------------------------
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_a2, SUM(amount) 
+   FROM src.transactions WHERE trx_ts >= DATE '2026-07-15' AND trx_ts < 
+   DATE '2026-07-16'
+    
+   Plan hash value: 4088813652
+    
+   ---------------------------------------------------------------------------------------------
+   | Id  | Operation          | Name         | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+   ---------------------------------------------------------------------------------------------
+   |   0 | SELECT STATEMENT   |              |      1 |        |      1 |00:00:00.12 |   32304 |
+   |   1 |  SORT AGGREGATE    |              |      1 |      1 |      1 |00:00:00.12 |   32304 |
+   |*  2 |   TABLE ACCESS FULL| TRANSACTIONS |      1 |  21545 |  20171 |00:00:00.06 |   32304 |
+   ---------------------------------------------------------------------------------------------
+    
+   Predicate Information (identified by operation id):
+   ---------------------------------------------------
+    
+      2 - filter(("TRX_TS"<TIMESTAMP' 2026-07-16 00:00:00' AND "TRX_TS">=TIMESTAMP' 
+                 2026-07-15 00:00:00'))
+    
+
+-- план perf_a3: тот же диапазон, индекс навязан хинтом (оптимизатор сам выбрал полный просмотр)
+   SELECT /*+ gather_plan_statistics INDEX(t ix_transactions_ts) */ COUNT(*) AS perf_a3, SUM(amount) FROM src.transactions t WHERE trx_ts >= DATE '2026-07-15' AND trx_ts < DATE '2026-07-16'
+   SQL_ID  5mpay6fpb5vw2, child number 0
+   -------------------------------------
+   SELECT /*+ gather_plan_statistics INDEX(t ix_transactions_ts) */ 
+   COUNT(*) AS perf_a3, SUM(amount) FROM src.transactions t WHERE trx_ts 
+   >= DATE '2026-07-15' AND trx_ts < DATE '2026-07-16'
+    
+   Plan hash value: 1898069069
+    
+   ---------------------------------------------------------------------------------------------------------------------
+   | Id  | Operation                            | Name               | Starts | E-Rows | A-Rows |   A-Time   | Buffers |
+   ---------------------------------------------------------------------------------------------------------------------
+   |   0 | SELECT STATEMENT                     |                    |      1 |        |      1 |00:00:00.01 |   20199 |
+   |   1 |  SORT AGGREGATE                      |                    |      1 |      1 |      1 |00:00:00.01 |   20199 |
+   |   2 |   TABLE ACCESS BY INDEX ROWID BATCHED| TRANSACTIONS       |      1 |  21545 |  20171 |00:00:00.01 |   20199 |
+   |*  3 |    INDEX RANGE SCAN                  | IX_TRANSACTIONS_TS |      1 |  21545 |  20171 |00:00:00.01 |     157 |
+   ---------------------------------------------------------------------------------------------------------------------
+    
+   Predicate Information (identified by operation id):
+   ---------------------------------------------------
+    
+      3 - access("TRX_TS">=TIMESTAMP' 2026-07-15 00:00:00' AND "TRX_TS"<TIMESTAMP' 2026-07-16 00:00:00')
+    
+
+-- план perf_b1: функция на ключе партиционирования: TO_CHAR(trx_date) = строка
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_b1, SUM(amount) FROM fct_transactions WHERE TO_CHAR(trx_date, 'YYYY-MM-DD') = '2026-07-15'
+   SQL_ID  fn8bdv1tvju9a, child number 1
+   -------------------------------------
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_b1, SUM(amount) 
+   FROM fct_transactions WHERE TO_CHAR(trx_date, 'YYYY-MM-DD') = 
+   '2026-07-15'
+    
+   Plan hash value: 145085506
+    
+   ----------------------------------------------------------------------------------------------------------------------------
+   | Id  | Operation            | Name             | Starts | E-Rows | Pstart| Pstop | A-Rows |   A-Time   | Buffers | Reads  |
+   ----------------------------------------------------------------------------------------------------------------------------
+   |   0 | SELECT STATEMENT     |                  |      1 |        |       |       |      1 |00:00:00.55 |   49625 |  49601 |
+   |   1 |  SORT AGGREGATE      |                  |      1 |      1 |       |       |      1 |00:00:00.55 |   49625 |  49601 |
+   |   2 |   PARTITION RANGE ALL|                  |      1 |  20171 |     1 |1048575|  20171 |00:00:00.26 |   49625 |  49601 |
+   |*  3 |    TABLE ACCESS FULL | FCT_TRANSACTIONS |      8 |  20171 |     1 |1048575|  20171 |00:00:00.55 |   49625 |  49601 |
+   ----------------------------------------------------------------------------------------------------------------------------
+    
+   Predicate Information (identified by operation id):
+   ---------------------------------------------------
+    
+      3 - filter(TO_CHAR(INTERNAL_FUNCTION("TRX_DATE"),'YYYY-MM-DD')='2026-07-15')
+    
+   Note
+   -----
+      - statistics feedback used for this statement
+    
+
+-- план perf_b2: сам ключ: trx_date = день
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_b2, SUM(amount) FROM fct_transactions WHERE trx_date = DATE '2026-07-15'
+   SQL_ID  a93kx1avzzscc, child number 0
+   -------------------------------------
+   SELECT /*+ gather_plan_statistics */ COUNT(*) AS perf_b2, SUM(amount) 
+   FROM fct_transactions WHERE trx_date = DATE '2026-07-15'
+    
+   Plan hash value: 4056834948
+    
+   ----------------------------------------------------------------------------------------------------------------------
+   | Id  | Operation               | Name             | Starts | E-Rows | Pstart| Pstop | A-Rows |   A-Time   | Buffers |
+   ----------------------------------------------------------------------------------------------------------------------
+   |   0 | SELECT STATEMENT        |                  |      1 |        |       |       |      1 |00:00:00.02 |    8063 |
+   |   1 |  SORT AGGREGATE         |                  |      1 |      1 |       |       |      1 |00:00:00.02 |    8063 |
+   |   2 |   PARTITION RANGE SINGLE|                  |      1 |  20171 |     8 |     8 |  20171 |00:00:00.02 |    8063 |
+   |*  3 |    TABLE ACCESS FULL    | FCT_TRANSACTIONS |      1 |  20171 |     8 |     8 |  20171 |00:00:00.02 |    8063 |
+   ----------------------------------------------------------------------------------------------------------------------
+    
+   Predicate Information (identified by operation id):
+   ---------------------------------------------------
+    
+      3 - filter("TRX_DATE"=TO_DATE(' 2026-07-15 00:00:00', 'syyyy-mm-dd hh24:mi:ss'))
+    
+
+## Почему на одном дне one_sql медленнее bulk_forall: разные планы одного и того же SELECT
+TRUNCATE перед каждым прогоном инвалидирует курсоры на perf_trx: INSERT ... SELECT каждый раз
+оптимизируется заново (уже со статистикой), курсор BULK COLLECT читает только v_trx_src и живёт со своим первым планом.
+
+-- курсор BULK COLLECT / цикла (план с первого разбора)
+   SELECT * FROM V_TRX_SRC WHERE TRX_TS >= :B2 AND TRX_TS < :B1
+   | Id  | Operation                              | Name               | Rows  |
+   |   0 | SELECT STATEMENT                       |                    |       |
+   |   1 |  FILTER                                |                    |       |
+   |   2 |   HASH JOIN RIGHT OUTER                |                    | 68173 |
+   |   3 |    TABLE ACCESS FULL                   | DIM_CLIENT         | 42345 |
+   |   4 |    HASH JOIN RIGHT OUTER               |                    | 68173 |
+   |   5 |     TABLE ACCESS FULL                  | DIM_CARD           | 61714 |
+   |   6 |     TABLE ACCESS BY INDEX ROWID BATCHED| TRANSACTIONS       | 68173 |
+   |   7 |      INDEX RANGE SCAN                  | IX_TRANSACTIONS_TS | 68173 |
+      1 - :B2 (DATE): 07/15/2026 00:00:00
+      2 - :B1 (DATE): 07/16/2026 00:00:00
+
+-- INSERT ... SELECT за день сразу после прогона
+   SYSTIMESTAMP FROM V_TRX_SRC WHERE TRX_TS >= :B2 AND TRX_TS < :B1
+   | Id  | Operation                | Name         | Rows  |
+   |   0 | INSERT STATEMENT         |              |       |
+   |   1 |  LOAD TABLE CONVENTIONAL | PERF_TRX     |       |
+   |   2 |   FILTER                 |              |       |
+   |   3 |    HASH JOIN OUTER       |              | 21545 |
+   |   4 |     HASH JOIN OUTER      |              | 21545 |
+   |   5 |      TABLE ACCESS FULL   | TRANSACTIONS | 21545 |
+   |   6 |      TABLE ACCESS FULL   | DIM_CARD     | 61714 |
+   |   7 |     TABLE ACCESS FULL    | DIM_CLIENT   | 42345 |
+      1 - :B2 (DATE): 07/15/2026 00:00:00
+      2 - :B1 (DATE): 07/16/2026 00:00:00
