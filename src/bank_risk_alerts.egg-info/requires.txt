@@ -1,4 +1,0 @@
-oracledb>=26.1
-
-[dev]
-pytest>=9.2
