@@ -21,6 +21,11 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--start", type=date.fromisoformat, default=Config.start)
     g.add_argument("--end", type=date.fromisoformat)
     sub.add_parser("stats", help="сводка по src")
+    ld = sub.add_parser("load", help="хранилище: pkg_dds.run_day за дни [start, end]")
+    ld.add_argument("--start", type=date.fromisoformat, required=True)
+    ld.add_argument("--end", type=date.fromisoformat)
+    rm = sub.add_parser("reload-month", help="хранилище: пересобрать месяц обменом партиций")
+    rm.add_argument("month", type=date.fromisoformat, help="любая дата месяца, например 2026-06-01")
     args = p.parse_args(argv)
 
     db.load_env()
@@ -41,6 +46,19 @@ def main(argv: list[str] | None = None) -> None:
                 counts = loader.load_day(conn, bank, day)
                 print(day, counts, f"{time.perf_counter() - t:.1f} с", flush=True)
                 day += timedelta(days=1)
+    elif args.cmd == "load":
+        day, end = args.start, args.end or args.start
+        with db.connect("dwh") as conn:
+            cur = conn.cursor()
+            while day <= end:
+                t = time.perf_counter()
+                cur.callproc("pkg_dds.run_day", [day])
+                print(day, f"{time.perf_counter() - t:.1f} с", flush=True)
+                day += timedelta(days=1)
+    elif args.cmd == "reload-month":
+        with db.connect("dwh") as conn:
+            conn.cursor().callproc("pkg_dds.reload_month", [args.month])
+        print("месяц пересобран:", args.month.strftime("%Y-%m"))
     else:
         with db.connect("src") as conn:
             print_stats(conn)

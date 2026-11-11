@@ -22,6 +22,21 @@ Confirmed fraud arrives in `fraud_reports` 1–14 days later and only for 90 % o
 as chargebacks do in real life. Every day is generated deterministically from a seed, so
 reloading a day gives the same rows.
 
+## Warehouse (`dwh` schema) — PL/SQL packages
+
+All warehouse logic lives in Oracle; Python and (later) Airflow only call the packages.
+
+| Object | What it does |
+|---|---|
+| `pkg_log` + `etl_log` | load journal written in autonomous transactions, so a failed load still leaves `ERROR` with the message and the package line |
+| `pkg_dds.load_dims` | `dim_card`, `dim_merchant` via `MERGE` (SCD1); `dim_client` as SCD2 in `[valid_from, valid_to)` versions; forward-only |
+| `pkg_dds.load_transactions` | one day of `fct_transactions`: `DELETE` + `INSERT` in one transaction, idempotent; point-in-time `client_sk`; an unknown card fails the load instead of being dropped by a join |
+| `pkg_dds.reload_month` | rebuilds a month by partition exchange (`CREATE TABLE ... FOR EXCHANGE`, `EXCHANGE PARTITION`) |
+| `fct_transactions` | monthly interval partitions; a one-day query reads one partition |
+
+Six months reconcile with the source to the last tiyn; a daily load takes 0.1–0.3 s.
+See [`docs/evidence/step-2-dwh.txt`](docs/evidence/step-2-dwh.txt) and `scripts/check_dwh.py`.
+
 ## Run
 
 ```bash
@@ -32,7 +47,10 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/bra init                    # clients, cards, merchants, loan history
 .venv/Scripts/bra generate --start 2026-05-01 --end 2026-10-31
 .venv/Scripts/bra stats
-.venv/Scripts/pytest
+.venv/Scripts/bra migrate dwh
+.venv/Scripts/bra load --start 2026-05-01 --end 2026-10-31
+.venv/Scripts/python scripts/check_dwh.py
+.venv/Scripts/pytest                      # integration tests need the running Oracle
 ```
 
 Oracle listens on `localhost:1521`, service `FREEPDB1`, schemas `src` and `dwh`.

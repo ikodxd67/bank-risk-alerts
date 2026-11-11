@@ -64,6 +64,8 @@ def _is_noise(line: str) -> bool:
 
 def migrate(conn: oracledb.Connection, folder: Path) -> list[str]:
     """Накатывает новые файлы folder/*.sql по алфавиту, помнит накаченные.
+    Потом — весь folder/code/*.sql (пакеты, представления): там CREATE OR REPLACE,
+    поэтому код накатывается каждый раз и правится прямо в файле, без новой миграции.
 
     shortcut: DDL в Oracle коммитится сам, поэтому упавший посреди файл
     оставит часть объектов — чинить руками; для учебного стенда хватает.
@@ -79,11 +81,21 @@ def migrate(conn: oracledb.Connection, folder: Path) -> list[str]:
     for path in sorted(folder.glob("*.sql")):
         if path.name in done:
             continue
-        for stmt in split_statements(path.read_text(encoding="utf-8")):
-            cur.execute(stmt)
-            if cur.warning:  # PL/SQL с ошибкой компиляции создаётся «успешно», с предупреждением
-                raise RuntimeError(f"{path.name}: {cur.warning}\n{stmt[:200]}")
+        _run_file(cur, path)
         cur.execute("INSERT INTO schema_migrations (file_name) VALUES (:1)", [path.name])
         conn.commit()
         applied.append(path.name)
+    for path in sorted((folder / "code").glob("*.sql")):
+        _run_file(cur, path)
+        applied.append(f"code/{path.name}")
     return applied
+
+
+def _run_file(cur: oracledb.Cursor, path: Path) -> None:
+    for stmt in split_statements(path.read_text(encoding="utf-8")):
+        cur.execute(stmt)
+        if warning := cur.warning:  # PL/SQL с ошибкой компиляции создаётся «успешно», с предупреждением
+            errors = cur.execute(
+                "SELECT name || ' ' || line || ':' || position || ' ' || text FROM user_errors"
+                " ORDER BY name, sequence").fetchall()
+            raise RuntimeError(f"{path.name}: {warning}\n" + "\n".join(e for (e,) in errors))

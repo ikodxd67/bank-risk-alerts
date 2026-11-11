@@ -1,0 +1,77 @@
+# Step 2 — DWH loaded by PL/SQL packages (captured 2026-11-11 20:40)
+# bra migrate dwh && bra load --start 2026-05-01 --end 2026-10-31; then pytest; then scripts/check_dwh.py
+
+$ pytest -v
+tests/test_dwh.py::test_run_day_twice_gives_same_result PASSED           [  5%]
+tests/test_dwh.py::test_scd2 PASSED                                      [ 11%]
+tests/test_dwh.py::test_failed_load_keeps_the_day_and_logs_error PASSED  [ 16%]
+tests/test_dwh.py::test_date_with_time_is_rejected PASSED                [ 22%]
+tests/test_dwh.py::test_reload_month_by_partition_exchange PASSED        [ 27%]
+tests/test_dwh.py::test_migrate_fails_on_plsql_compile_error PASSED      [ 33%]
+tests/test_generator.py::test_same_day_same_rows PASSED                  [ 38%]
+tests/test_generator.py::test_rows_are_inside_the_day_and_ids_unique PASSED [ 44%]
+tests/test_generator.py::test_reserved_range_holds_exactly_the_fraud PASSED [ 50%]
+tests/test_generator.py::test_velocity_is_a_burst_within_an_hour PASSED  [ 55%]
+tests/test_generator.py::test_geo_goes_abroad_soon_after_home PASSED     [ 61%]
+tests/test_generator.py::test_ato_is_night_p2p_from_new_device PASSED    [ 66%]
+tests/test_generator.py::test_reports_point_to_fraud_of_last_two_weeks PASSED [ 72%]
+tests/test_generator.py::test_no_reports_before_history_start PASSED     [ 77%]
+tests/test_generator.py::test_add_months_clamps_end_of_month PASSED      [ 83%]
+tests/test_generator.py::test_loan_payments_follow_issue PASSED          [ 88%]
+tests/test_split_statements.py::test_sql_loses_semicolon_plsql_keeps_it PASSED [ 94%]
+tests/test_split_statements.py::test_last_statement_without_slash_and_empty_chunks PASSED [100%]
+============================= 18 passed in 3.89s ==============================
+
+$ python scripts/check_dwh.py
+
+-- журнал загрузок: шаг, статус, запусков, строк всего, среднее время, с
+   load_dims OK 190 119473 0.09
+   load_transactions ERROR 3 None 0.22
+   load_transactions OK 193 4145439 0.1
+   reload_month OK 3 1925025 1.56
+
+-- ошибки в журнале
+   load_transactions 2026-07-15 ORA-01400: cannot insert NULL into ("DWH"."FCT_TRANSACTIONS"."CLIENT_ID") | ORA-06512: at "DWH.PKG_DDS", line 100 | 
+   load_transactions 2026-07-15 ORA-01400: cannot insert NULL into ("DWH"."FCT_TRANSACTIONS"."CLIENT_ID") | ORA-06512: at "DWH.PKG_DDS", line 100 | 
+   load_transactions 2026-07-15 ORA-01400: cannot insert NULL into ("DWH"."FCT_TRANSACTIONS"."CLIENT_ID") | ORA-06512: at "DWH.PKG_DDS", line 100 | 
+
+-- сверка по месяцам: источник (операций, сумма) и хранилище (операций, сумма)
+   2026-05 668745 8762521314.49 668745 8762521314.49 OK
+   2026-06 641675 8397367912.79 641675 8397367912.79 OK
+   2026-07 672860 8818094304.01 672860 8818094304.01 OK
+   2026-08 668401 8760893238.99 668401 8760893238.99 OK
+   2026-09 641639 8388705915.25 641639 8388705915.25 OK
+   2026-10 670580 8780713924.93 670580 8780713924.93 OK
+
+-- партиции факта (interval создаёт их сами)
+   1 P_START TO_DATE(' 2026-01-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+   2 SYS_P679 TO_DATE(' 2026-06-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+   3 SYS_P680 TO_DATE(' 2026-07-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+   4 SYS_P681 TO_DATE(' 2026-08-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+   5 SYS_P682 TO_DATE(' 2026-09-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+   6 SYS_P683 TO_DATE(' 2026-10-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+   7 SYS_P684 TO_DATE(' 2026-11-01 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')
+
+-- план запроса за один день: читается одна партиция (Pstart = Pstop)
+   Plan hash value: 4056834948
+    
+   --------------------------------------------------------------------
+   | Id  | Operation               | Name             | Pstart| Pstop |
+   --------------------------------------------------------------------
+   |   0 | SELECT STATEMENT        |                  |       |       |
+   |   1 |  SORT AGGREGATE         |                  |       |       |
+   |   2 |   PARTITION RANGE SINGLE|                  |     8 |     8 |
+   |   3 |    TABLE ACCESS FULL    | FCT_TRANSACTIONS |     8 |     8 |
+   --------------------------------------------------------------------
+
+-- дубли trx_id в факте (должно быть 0)
+   0
+
+-- измерения: версий клиента, клиентов, открытых версий, карт, продавцов
+   50000 50000 50000 67473 2000
+
+-- пересекающиеся версии клиента (должно быть 0)
+   0
+
+-- следы тестов: версии после 2026-12-31 и тестовая операция в src (должно быть 0 0)
+   0 0
