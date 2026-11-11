@@ -18,5 +18,51 @@ services:
       timeout: 5s
       retries: 60
 
+  # Метаданные Airflow (запуски, состояния задач). Не путать с хранилищем — оно в Oracle.
+  airflow-db:
+    image: postgres:17-alpine
+    container_name: bra-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 20
+
+  # shortcut: один контейнер `airflow standalone` (api-server, scheduler, dag-processor,
+  # triggerer в одном процессе) — экономит память стенда; в проде это отдельные сервисы.
+  airflow:
+    build: docker/airflow
+    image: bra-airflow:3.4.0
+    container_name: bra-airflow
+    command: standalone
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      # локальный стенд без входа: все — админы. Только для своей машины.
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+      AIRFLOW_CONN_ORACLE_DWH: >-
+        {"conn_type": "oracle", "host": "oracle", "port": 1521, "login": "dwh",
+         "password": "${DWH_PASSWORD}", "extra": {"service_name": "FREEPDB1"}}
+      AIRFLOW_CONN_TELEGRAM_DEFAULT: >-
+        {"conn_type": "telegram", "password": "${TG_BOT_TOKEN}", "host": "${TG_CHAT_ID}"}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      oracle:
+        condition: service_healthy
+      airflow-db:
+        condition: service_healthy
+
 volumes:
   oradata:
+  airflow-db:
+  airflow-logs:

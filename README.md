@@ -64,11 +64,31 @@ Recall by fraud card-day is 1.0 for VELOCITY and GEO, 0.99 for ATO and 0.74 for 
 (cards with fewer than 3 purchases in 30 days have no baseline). The DPD snapshot is checked
 loan by loan against an independent Python calculation in `tests/test_marts.py`.
 
+## Orchestration (Airflow 3.4)
+
+`dags/bank_daily.py` runs one day per DAG run (`ds` = the day being loaded):
+
+```
+wait_source → load_dds → check_dds → build_marts → check_marts
+```
+
+- `wait_source` — `SqlSensor` in `reschedule` mode: the source writes a day in one transaction, so "rows exist" means "the day is complete".
+- `load_dds`, `build_marts` — call `pkg_dds.run_day` / `pkg_marts.run_day` through `OracleHook.callproc`; all logic stays in PL/SQL.
+- `check_dds`, `check_marts` — one SQL row, one column per check (source = warehouse by count and amount, no duplicates, turnover = fact, features for every transaction, rules fired, DPD snapshot built); a failure names the checks that did not pass.
+- Explicit `CronDataIntervalTimetable` (in Airflow 3 a bare cron gives `CronTriggerTimetable`, where `ds` is the run time), `catchup=True` and `max_active_runs=1` plus `depends_on_past` on `load_dds`: dimensions load forward only, so days must go in order and without gaps.
+- Any task that fails after its retry sends a Telegram message (`on_failure_callback` + `TelegramHook`).
+
+Proof in [`docs/evidence/step-4-airflow.txt`](docs/evidence/step-4-airflow.txt): a 7-day backfill plus 3 catch-up days, all green and reconciled with the source;
+then all fraud rules were switched off on purpose, the marts rebuild for 2026-11-10 failed on
+`fraud_rules_fired` and the alert went to Telegram; rules back on, same day cleared and green.
+
+![Airflow runs](docs/img/airflow-backfill-green.png)
+
 ## Run
 
 ```bash
-cp .env.example .env
-docker compose up -d                      # Oracle Free, first start ~2–3 min
+cp .env.example .env                      # fill TG_BOT_TOKEN / TG_CHAT_ID for failure alerts
+docker compose up -d oracle               # Oracle Free, first start ~2–3 min
 py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/bra migrate src
 .venv/Scripts/bra init                    # clients, cards, merchants, loan history
@@ -80,6 +100,8 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/python scripts/check_dwh.py
 .venv/Scripts/python scripts/check_marts.py
 .venv/Scripts/pytest                      # integration tests need the running Oracle
+docker compose up -d                      # + Airflow on http://localhost:8080 (no login, local only)
+docker exec bra-airflow airflow backfill create --dag-id bank_daily     --from-date 2026-11-01 --to-date 2026-11-07 --max-active-runs 1 --reprocess-behavior failed
 ```
 
 Oracle listens on `localhost:1521`, service `FREEPDB1`, schemas `src` and `dwh`.

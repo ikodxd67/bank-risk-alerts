@@ -1,0 +1,81 @@
+# Шаг 4: Airflow bank_daily, 2026-11-11 (данные сгенерированы)
+
+## 1. Бэкфилл 1–7 ноября + догон 8–10 ноября (catchup)
+$ airflow backfill create --dag-id bank_daily --from-date 2026-11-01 --to-date 2026-11-07 --max-active-runs 1 --reprocess-behavior failed
+$ airflow dags list-runs bank_daily
+run_id state logical_date
+scheduled__2026-11-11T00:00:00+00:00 success 2026-11-10T00:00:00+00:00
+scheduled__2026-11-10T00:00:00+00:00 success 2026-11-09T00:00:00+00:00
+scheduled__2026-11-09T00:00:00+00:00 success 2026-11-08T00:00:00+00:00
+backfill__2026-11-08T00:00:00+00:00 success 2026-11-07T00:00:00+00:00
+backfill__2026-11-07T00:00:00+00:00 success 2026-11-06T00:00:00+00:00
+backfill__2026-11-06T00:00:00+00:00 success 2026-11-05T00:00:00+00:00
+backfill__2026-11-05T00:00:00+00:00 success 2026-11-04T00:00:00+00:00
+backfill__2026-11-04T00:00:00+00:00 success 2026-11-03T00:00:00+00:00
+backfill__2026-11-03T00:00:00+00:00 success 2026-11-02T00:00:00+00:00
+backfill__2026-11-02T00:00:00+00:00 success 2026-11-01T00:00:00+00:00
+
+$ airflow tasks states-for-dag-run bank_daily scheduled__2026-11-11T00:00:00+00:00
+task_id state
+wait_source success
+load_dds success
+check_dds success
+build_marts success
+check_marts success
+
+-- журнал за 1–10 ноября: шаг, статус, запусков, строк
+   build_dpd OK 10 94799
+   build_fraud OK 10 310
+   build_turnover OK 10 60
+   load_dims OK 10 4365
+   load_payments OK 10 2919
+   load_transactions OK 10 215635
+
+-- сверка ноября: источник и хранилище (операций, сумма)
+   215635 2824261096.52 215635 2824261096.52
+
+## 2. Подложенный сбой: все правила выключены (UPDATE fraud_rule SET is_active = 'N'), пересборка витрин за 2026-11-10
+$ airflow tasks clear bank_daily -t "^build_marts$" -s 2026-11-10 -e 2026-11-10 -d -y
+$ airflow tasks states-for-dag-run bank_daily scheduled__2026-11-11T00:00:00+00:00
+task_id state 
+build_marts success 
+check_marts failed 
+wait_source success 
+load_dds success 
+check_dds success 
+
+-- лог последней попытки check_marts (события)
+2026-11-11T16:45:30.637517Z info ::group::Pre Execute
+2026-11-11T16:45:30.657211Z info DAG bundles loaded: dags-folder
+2026-11-11T16:45:30.663786Z info Filling up the DagBag from /opt/airflow/dags/bank_daily.py
+2026-11-11T16:45:30.813414Z info Worker startup parse complete
+2026-11-11T16:45:30.838836Z info ::endgroup::
+2026-11-11T16:45:30.918966Z error Task failed with exception
+не прошли проверки: fraud_rules_fired
+не прошли проверки: 
+2026-11-11T16:45:30.925350Z info ::group::Post Execute
+2026-11-11T16:45:31.327272Z info сообщение о падении отправлено в Telegram
+2026-11-11T16:45:31.327172Z info ::endgroup::
+
+## 3. Правила включены обратно, пересборка 2026-11-10 тем же clear
+run_id state logical_date
+scheduled__2026-11-11T00:00:00+00:00 success 2026-11-10T00:00:00+00:00
+task_id state
+build_marts success
+wait_source success
+load_dds success
+check_marts success
+check_dds success
+-- срабатываний за 2026-11-10 по правилам: AMOUNT_30D=5, GEO_SWITCH=4, NIGHT_P2P_NEW_DEVICE=3, VELOCITY_1H=13
+-- журнал build_fraud за 2026-11-10 (каждая пересборка — строка):
+   16:41:50 OK 25
+   16:42:42 OK 0
+   16:46:06 OK 25
+
+$ airflow dags list-import-errors
+No data found
+
+-- память контейнеров
+bra-airflow 2.058GiB / 7.558GiB
+bra-airflow-db 81.1MiB / 7.558GiB
+bra-oracle 2.959GiB / 7.558GiB

@@ -47,16 +47,36 @@ def last_log(dwh, step, day):
         " ORDER BY log_id DESC FETCH FIRST 1 ROW ONLY", s=step, d=day).fetchone()
 
 
-def test_run_day_twice_gives_same_result(dwh):
+def test_old_day_reloads_facts_but_not_dims(dwh):
+    """Прошлый день: факт перегружается сколько угодно раз, а измерения — нет (ORA-20002),
+    иначе версии клиентов легли бы задним числом."""
     cur = dwh.cursor()
     before = fact_day(dwh, LOADED_DAY)
     for _ in range(2):
-        cur.callproc("pkg_dds.run_day", [LOADED_DAY])
+        cur.callproc("pkg_dds.load_transactions", [LOADED_DAY])
     assert fact_day(dwh, LOADED_DAY) == before
-    status, rows, _ = last_log(dwh, "load_transactions", LOADED_DAY)
+    (last_version,) = cur.execute("SELECT MAX(valid_from) FROM dim_client").fetchone()
+    if last_version.date() > LOADED_DAY:
+        with pytest.raises(oracledb.DatabaseError, match="ORA-20002"):
+            cur.callproc("pkg_dds.run_day", [LOADED_DAY])
+        cur.execute("DELETE FROM etl_log WHERE load_date = :d AND step = 'load_dims' AND status = 'ERROR'"
+                    " AND message LIKE 'ORA-20002%'", d=LOADED_DAY)   # ожидаемая ошибка — не сбой дня
+        dwh.commit()
+
+
+def test_run_day_twice_gives_same_result(dwh):
+    """Последний загруженный день — полный run_day дважды даёт то же самое."""
+    cur = dwh.cursor()
+    (day,) = cur.execute("SELECT MAX(trx_date) FROM fct_transactions").fetchone()
+    day = day.date()
+    before = fact_day(dwh, day)
+    for _ in range(2):
+        cur.callproc("pkg_dds.run_day", [day])
+    assert fact_day(dwh, day) == before
+    status, rows, _ = last_log(dwh, "load_transactions", day)
     assert (status, rows) == ("OK", before[0])
     src_day = cur.execute("SELECT COUNT(*), SUM(amount) FROM src.transactions"
-                          " WHERE trx_ts >= :d AND trx_ts < :d + 1", d=LOADED_DAY).fetchone()
+                          " WHERE trx_ts >= :d AND trx_ts < :d + 1", d=day).fetchone()
     assert src_day == before[:2]
 
 
