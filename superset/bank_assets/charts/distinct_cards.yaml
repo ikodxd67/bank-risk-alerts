@@ -1,0 +1,14 @@
+slice_name: Distinct active cards per week (bitmap)
+viz_type: echarts_timeseries_bar
+uuid: 0b0b0b0b-0000-4000-8000-000000000023
+dataset_uuid: 0b0b0b0b-0000-4000-8000-000000000012
+version: 1.0.0
+params:
+  viz_type: echarts_timeseries_bar
+  x_axis: trx_date
+  time_grain_sqla: P1W
+  metrics: [distinct_cards]
+  groupby: []
+  row_limit: 10000
+  adhoc_filters:
+  - {clause: WHERE, expressionType: SIMPLE, subject: trx_date, operator: TEMPORAL_RANGE, comparator: No filter}

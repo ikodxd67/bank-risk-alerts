@@ -1,0 +1,23 @@
+# Куда слать: один получатель — Telegram. Токен и чат приходят из окружения (.env).
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: telegram
+    receivers:
+      - uid: telegram_bank
+        type: telegram
+        settings:
+          bottoken: $TG_BOT_TOKEN
+          chatid: "$TG_CHAT_ID"
+          message: |
+            {{ range .Alerts }}{{ if eq .Status "firing" }}🔔{{ else }}✅{{ end }} {{ .Labels.alertname }}: {{ .Annotations.summary }}
+            {{ end }}
+
+policies:
+  - orgId: 1
+    receiver: telegram
+    group_by: ['alertname']
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 4h      # пока алерт горит, напоминать раз в 4 часа, а не каждую проверку

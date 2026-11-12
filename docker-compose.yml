@@ -84,7 +84,48 @@ services:
       timeout: 5s
       retries: 60
 
+  # Алерты на данных StarRocks → Telegram. Правила, источник и получатель — файлами (provisioning).
+  grafana:
+    image: grafana/grafana:13.3.1
+    container_name: bra-grafana
+    profiles: ["bi"]
+    ports:
+      - "3000:3000"
+    environment:
+      # локальный стенд без входа: аноним — админ. Только для своей машины.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      TG_BOT_TOKEN: ${TG_BOT_TOKEN}
+      TG_CHAT_ID: ${TG_CHAT_ID}
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      starrocks:
+        condition: service_healthy
+
+  # Дашборды на StarRocks. Описаны файлами в superset/bank_assets и импортируются при старте.
+  superset:
+    build: docker/superset
+    image: bra-superset:6.1.0
+    container_name: bra-superset
+    profiles: ["bi"]
+    command: ["/app/start.sh"]
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+    volumes:
+      - ./docker/superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./docker/superset/start.sh:/app/start.sh:ro
+      - ./superset:/app/assets_src:ro
+      - superset-home:/app/superset_home
+    depends_on:
+      starrocks:
+        condition: service_healthy
+
 volumes:
+  superset-home:
   sr-meta:
   sr-storage:
   oradata:

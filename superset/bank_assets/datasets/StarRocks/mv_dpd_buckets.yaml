@@ -1,0 +1,14 @@
+table_name: mv_dpd_buckets
+schema: bank
+main_dttm_col: snapshot_date
+uuid: 0b0b0b0b-0000-4000-8000-000000000014
+database_uuid: 0b0b0b0b-0000-4000-8000-000000000001
+version: 1.0.0
+metrics:
+- {metric_name: loans, verbose_name: Loans, expression: SUM(loans)}
+- {metric_name: overdue_amount, verbose_name: Overdue amount, expression: SUM(overdue_amount)}
+columns:
+- {column_name: snapshot_date, type: DATE, is_dttm: true, is_active: true, groupby: true, filterable: true}
+- {column_name: bucket, type: VARCHAR, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: loans, type: BIGINT, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: overdue_amount, type: DECIMAL, is_dttm: false, is_active: true, groupby: true, filterable: true}

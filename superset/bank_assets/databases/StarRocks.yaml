@@ -1,0 +1,11 @@
+database_name: StarRocks
+# стенд: root без пароля, как в образе allin1
+sqlalchemy_uri: starrocks://root@starrocks:9030/default_catalog.bank
+expose_in_sqllab: true
+allow_run_async: false
+allow_ctas: false
+allow_cvas: false
+allow_dml: false
+extra: {}
+uuid: 0b0b0b0b-0000-4000-8000-000000000001
+version: 1.0.0

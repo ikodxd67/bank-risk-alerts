@@ -1,0 +1,18 @@
+table_name: turnover_daily
+schema: bank
+main_dttm_col: report_date
+uuid: 0b0b0b0b-0000-4000-8000-000000000011
+database_uuid: 0b0b0b0b-0000-4000-8000-000000000001
+version: 1.0.0
+metrics:
+- {metric_name: approved_amount, verbose_name: Approved amount, expression: SUM(approved_amount)}
+- {metric_name: trx_cnt, verbose_name: Transactions, expression: SUM(trx_cnt)}
+- {metric_name: decline_rate, verbose_name: Decline rate, expression: SUM(declined_cnt) / SUM(trx_cnt), d3format: '.2%'}
+columns:
+- {column_name: report_date, type: DATE, is_dttm: true, is_active: true, groupby: true, filterable: true}
+- {column_name: channel, type: VARCHAR, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: is_foreign, type: VARCHAR, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: trx_cnt, type: BIGINT, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: declined_cnt, type: BIGINT, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: approved_amount, type: DECIMAL, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: card_cnt, type: BIGINT, is_dttm: false, is_active: true, groupby: true, filterable: true}

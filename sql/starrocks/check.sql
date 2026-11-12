@@ -30,7 +30,8 @@ FROM (
     UNION ALL
     SELECT 'fraud_label',
            (SELECT COUNT(*) FROM oracle_dwh.DWH.FRAUD_LABEL), (SELECT COUNT(*) FROM fraud_label),
-           (SELECT SUM(TRX_ID) FROM oracle_dwh.DWH.FRAUD_LABEL), (SELECT SUM(trx_id) FROM fraud_label)
+           -- остаток от деления: сумма 14-значных номеров уходит в DOUBLE и теряет точность
+           (SELECT SUM(CAST(TRX_ID AS BIGINT) % 1000000) FROM oracle_dwh.DWH.FRAUD_LABEL), (SELECT SUM(trx_id % 1000000) FROM fraud_label)
     UNION ALL
     SELECT 'loan_dpd',
            (SELECT COUNT(*) FROM oracle_dwh.DWH.MART_LOAN_DPD), (SELECT COUNT(*) FROM loan_dpd),

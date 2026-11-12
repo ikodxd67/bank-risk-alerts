@@ -1,0 +1,13 @@
+slice_name: Alerts confirmed by chargebacks
+viz_type: table
+uuid: 0b0b0b0b-0000-4000-8000-000000000025
+dataset_uuid: 0b0b0b0b-0000-4000-8000-000000000013
+version: 1.0.0
+params:
+  viz_type: table
+  query_mode: aggregate
+  groupby: [rule_code]
+  metrics: [alerts, confirmed, precision]
+  row_limit: 100
+  adhoc_filters:
+  - {clause: WHERE, expressionType: SIMPLE, subject: alert_date, operator: TEMPORAL_RANGE, comparator: No filter}

@@ -1,0 +1,15 @@
+table_name: mv_rule_daily
+schema: bank
+main_dttm_col: alert_date
+uuid: 0b0b0b0b-0000-4000-8000-000000000013
+database_uuid: 0b0b0b0b-0000-4000-8000-000000000001
+version: 1.0.0
+metrics:
+- {metric_name: alerts, verbose_name: Alerts, expression: SUM(alerts)}
+- {metric_name: confirmed, verbose_name: Confirmed by chargeback, expression: SUM(confirmed)}
+- {metric_name: precision, verbose_name: Precision, expression: SUM(confirmed) / SUM(alerts), d3format: '.1%'}
+columns:
+- {column_name: alert_date, type: DATE, is_dttm: true, is_active: true, groupby: true, filterable: true}
+- {column_name: rule_code, type: VARCHAR, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: alerts, type: BIGINT, is_dttm: false, is_active: true, groupby: true, filterable: true}
+- {column_name: confirmed, type: BIGINT, is_dttm: false, is_active: true, groupby: true, filterable: true}

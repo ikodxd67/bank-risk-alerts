@@ -1,0 +1,105 @@
+# Правила алертов на данных StarRocks. Каждое правило: запрос A возвращает одно число,
+# выражение C сравнивает его с порогом. Если запрос упал или не вернул данных — это тоже алерт.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: bank
+    folder: bank-risk-alerts
+    interval: 1m
+    rules:
+      # DAG грузит вчерашний день сразу после полуночи UTC. Если последний день в витрине
+      # старше вчерашнего — загрузка не дошла до конца (упала, ждёт источник, Airflow лежит).
+      - uid: bank_data_stale
+        title: Данные устарели
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: 'последний загруженный день отстаёт от сегодня на {{ index $values "A" }} дн. (норма — 1)'
+        labels:
+          severity: critical
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: starrocks
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: SELECT DATEDIFF(CURDATE(), MAX(report_date)) AS days_behind FROM bank.turnover_daily
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+
+      # В норме 15–60 срабатываний в день. Ноль — правила выключены или сломались признаки.
+      - uid: bank_zero_fraud_alerts
+        title: Ноль срабатываний антифрода
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: 'за последний загруженный день срабатываний правил: {{ index $values "A" }}'
+        labels:
+          severity: critical
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: starrocks
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COUNT(a.trx_id) AS alerts
+                FROM (SELECT MAX(report_date) AS d FROM bank.turnover_daily) m
+                LEFT JOIN bank.fraud_alert a ON a.alert_date = m.d
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      # Всплеск: за последний день срабатываний втрое больше среднего за 7 дней до него —
+      # возможная атака или правило с испорченным порогом.
+      - uid: bank_fraud_alert_spike
+        title: Всплеск срабатываний антифрода
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: 'срабатываний за последний день в {{ index $values "A" }} раз больше среднего за 7 дней'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: starrocks
+            model:
+              refId: A
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT ROUND(SUM(IF(alert_date = d, alerts, 0)) / (SUM(IF(alert_date < d, alerts, 0)) / 7), 2) AS ratio
+                FROM bank.mv_rule_daily
+                CROSS JOIN (SELECT MAX(report_date) AS d FROM bank.turnover_daily) m
+                WHERE alert_date BETWEEN DATE_SUB(d, INTERVAL 7 DAY) AND d
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [3] }

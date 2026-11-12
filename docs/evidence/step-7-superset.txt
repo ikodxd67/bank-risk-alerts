@@ -1,0 +1,32 @@
+# Шаг 7: Superset 6.1.0 на StarRocks. Дашборд описан файлами superset/bank_assets и импортируется при старте. Данные сгенерированы.
+
+$ curl localhost:8088/api/v1/dashboard/  и  /api/v1/chart/  и  /api/v1/dataset/
+dashboard: 1 ['Bank risk and turnover']
+chart: 7 ['Alerts confirmed by chargebacks', 'Approved turnover by channel', 'Decline rate by channel', 'Distinct active cards per week (bitmap)', 'Fraud alerts by rule', 'Overdue amount, 90+ days', 'Overdue loans by DPD bucket']
+dataset: 4 ['mv_dpd_buckets', 'mv_rule_daily', 'trx_hourly', 'turnover_daily']
+database: 1 ['StarRocks']
+
+## Числа на дашборде против StarRocks напрямую
++----------------------+--------+-----------+---------------+
+| rule_code            | alerts | confirmed | precision_pct |
++----------------------+--------+-----------+---------------+
+| VELOCITY_1H          |   2807 |      2354 |          83.9 |
+| AMOUNT_30D           |   1196 |       273 |          22.8 |
+| NIGHT_P2P_NEW_DEVICE |   1168 |       230 |          19.7 |
+| GEO_SWITCH           |    804 |       262 |          32.6 |
++----------------------+--------+-----------+---------------+
++---------------+----------------+
+| snapshot_date | overdue_amount |
++---------------+----------------+
+| 2026-11-11    |   259091164.71 |
++---------------+----------------+
+
+## Память всего стенда (6 контейнеров)
+bra-superset 255.4MiB / 7.558GiB
+bra-grafana 599.8MiB / 7.558GiB
+bra-airflow 1.169GiB / 7.558GiB
+bra-starrocks 1.813GiB / 7.558GiB
+bra-airflow-db 70.14MiB / 7.558GiB
+bra-oracle 1.796GiB / 7.558GiB
+
+Скриншот: docs/img/superset-bank-risk.png

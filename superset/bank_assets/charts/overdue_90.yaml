@@ -1,0 +1,14 @@
+slice_name: Overdue amount, 90+ days
+viz_type: big_number
+uuid: 0b0b0b0b-0000-4000-8000-000000000027
+dataset_uuid: 0b0b0b0b-0000-4000-8000-000000000014
+version: 1.0.0
+params:
+  viz_type: big_number
+  x_axis: snapshot_date
+  time_grain_sqla: P1D
+  metric: overdue_amount
+  y_axis_format: '.3s'
+  adhoc_filters:
+  - {clause: WHERE, expressionType: SIMPLE, subject: snapshot_date, operator: TEMPORAL_RANGE, comparator: No filter}
+  - {clause: WHERE, expressionType: SIMPLE, subject: bucket, operator: '==', comparator: '90+'}

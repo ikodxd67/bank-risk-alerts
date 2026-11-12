@@ -111,6 +111,33 @@ Full history reconciles with Oracle, see [`docs/evidence/step-6-starrocks.txt`](
 Distinct cards for the first week of November: summing daily `card_cnt` gives 138 157, the
 bitmap gives 52 748, the same as `COUNT(DISTINCT)` in Oracle.
 
+## Dashboards and alerts
+
+**Superset 6.1** reads StarRocks. The dashboard is code: database, datasets, charts and layout are
+YAML in [`superset/bank_assets/`](superset/bank_assets) and are imported on every start.
+
+![Superset dashboard](docs/img/superset-bank-risk.png)
+
+**Grafana 13.3** evaluates three alert rules on StarRocks every minute and sends them to Telegram.
+Rules, data source and contact point are provisioned from [`docker/grafana/provisioning/`](docker/grafana/provisioning).
+
+| Rule | Fires when |
+|---|---|
+| Data is stale | the last loaded day is older than yesterday: the load failed, waits for the source, or Airflow is down |
+| Zero fraud alerts | no rule fired on the last loaded day (normally 15–60 alerts a day) |
+| Fraud alert spike | the last day has 3× the average of the previous 7 days |
+
+Both failure cases were planted on purpose, see [`docs/evidence/step-7-grafana.txt`](docs/evidence/step-7-grafana.txt):
+- All fraud rules were switched off and the day was loaded around the DAG. "Zero fraud alerts" fired about 1.5 minutes later.
+- The last day was removed from StarRocks. "Data is stale" fired.
+
+Both reached Telegram and resolved after the fix.
+
+![Grafana alert firing](docs/img/grafana-alert-firing.png)
+
+Alerting is layered: Airflow reports a failed task at once, and Grafana watches the data itself,
+so it also catches what goes around the DAG or never starts.
+
 ## Performance
 
 [`docs/performance.md`](docs/performance.md) has the measurements for one month (672 860 rows),
@@ -144,7 +171,7 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/python scripts/check_marts.py
 .venv/Scripts/python scripts/perf.py      # measurements for docs/performance.md (~2 min)
 .venv/Scripts/pytest                      # integration tests need the running Oracle
-docker compose --profile bi up -d         # + Airflow on http://localhost:8080 (no login, local only) and StarRocks
+docker compose --profile bi up -d         # + Airflow :8080, StarRocks :9030, Superset :8088, Grafana :3000 (no login, local only)
 bash scripts/starrocks.sh init            # JDBC catalog, tables, materialized views
 bash scripts/starrocks.sh export 2026-05-01 2026-10-31
 bash scripts/starrocks.sh check           # StarRocks vs Oracle

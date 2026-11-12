@@ -1,0 +1,15 @@
+slice_name: Fraud alerts by rule
+viz_type: echarts_timeseries_bar
+uuid: 0b0b0b0b-0000-4000-8000-000000000024
+dataset_uuid: 0b0b0b0b-0000-4000-8000-000000000013
+version: 1.0.0
+params:
+  viz_type: echarts_timeseries_bar
+  x_axis: alert_date
+  time_grain_sqla: P1W
+  metrics: [alerts]
+  groupby: [rule_code]
+  stack: Stack
+  row_limit: 10000
+  adhoc_filters:
+  - {clause: WHERE, expressionType: SIMPLE, subject: alert_date, operator: TEMPORAL_RANGE, comparator: No filter}

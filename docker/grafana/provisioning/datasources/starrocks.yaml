@@ -1,0 +1,11 @@
+# StarRocks говорит по протоколу MySQL, поэтому источник — обычный MySQL.
+apiVersion: 1
+
+datasources:
+  - name: StarRocks
+    uid: starrocks
+    type: mysql
+    url: starrocks:9030
+    user: root          # стенд: root без пароля, как в образе allin1
+    jsonData:
+      database: bank
