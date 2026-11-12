@@ -51,10 +51,14 @@ services:
       AIRFLOW_CONN_ORACLE_DWH: >-
         {"conn_type": "oracle", "host": "oracle", "port": 1521, "login": "dwh",
          "password": "${DWH_PASSWORD}", "extra": {"service_name": "FREEPDB1"}}
+      # стенд: root без пароля, как в образе allin1; в проде — отдельный пользователь с паролем
+      AIRFLOW_CONN_STARROCKS: >-
+        {"conn_type": "mysql", "host": "starrocks", "port": 9030, "login": "root", "password": ""}
       AIRFLOW_CONN_TELEGRAM_DEFAULT: >-
         {"conn_type": "telegram", "password": "${TG_BOT_TOKEN}", "host": "${TG_CHAT_ID}"}
     volumes:
       - ./dags:/opt/airflow/dags
+      - ./sql/starrocks:/opt/airflow/sql/starrocks:ro
       - airflow-logs:/opt/airflow/logs
     depends_on:
       oracle:
@@ -62,7 +66,27 @@ services:
       airflow-db:
         condition: service_healthy
 
+  # Витрины под дашборды. FE + BE в одном контейнере — только для стенда.
+  # Профиль bi: тяжёлый (просит 4 ГБ), поднимается отдельно: docker compose --profile bi up -d
+  starrocks:
+    image: starrocks/allin1-ubuntu:4.1.7
+    container_name: bra-starrocks
+    profiles: ["bi"]
+    ports:
+      - "9030:9030"   # SQL по протоколу MySQL
+      - "8030:8030"   # веб-интерфейс FE
+    volumes:
+      - sr-meta:/data/deploy/starrocks/fe/meta
+      - sr-storage:/data/deploy/starrocks/be/storage
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'SHOW BACKENDS' | grep -q true"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
 volumes:
+  sr-meta:
+  sr-storage:
   oradata:
   airflow-db:
   airflow-logs:

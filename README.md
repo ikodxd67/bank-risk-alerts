@@ -70,7 +70,7 @@ loan by loan against an independent Python calculation in `tests/test_marts.py`.
 `dags/bank_daily.py` runs one day per DAG run (`ds` = the day being loaded):
 
 ```
-wait_source → load_dds → check_dds → build_marts → check_marts
+wait_source → load_dds → check_dds → build_marts → check_marts → export_starrocks → check_starrocks
 ```
 
 - `wait_source` — `SqlSensor` in `reschedule` mode: the source writes a day in one transaction, so "rows exist" means "the day is complete".
@@ -84,6 +84,32 @@ then all fraud rules were switched off on purpose, the marts rebuild for 2026-11
 `fraud_rules_fired` and the alert went to Telegram; rules back on, same day cleared and green.
 
 ![Airflow runs](docs/img/airflow-backfill-green.png)
+
+## Serving layer (StarRocks 4.1)
+
+StarRocks reads Oracle through a **JDBC catalog** and keeps its own copies of the marts for
+dashboards and alerts: [`sql/starrocks/schema.sql`](sql/starrocks/schema.sql).
+
+| Table | Model | Why this model |
+|---|---|---|
+| `turnover_daily`, `fraud_alert`, `etl_log` | Primary Key | one row per key, a reload replaces it |
+| `fraud_label` | Primary Key | chargebacks arrive late for any past day: plain upsert |
+| `trx_hourly` | Aggregate | rolled up on write; `BITMAP_UNION` of card ids gives exact distinct cards over any period |
+| `loan_dpd` | Duplicate Key, monthly partitions | detail rows for the DPD snapshot |
+| `mv_dpd_buckets`, `mv_rule_daily` | async materialized views | refreshed by StarRocks after the base tables change |
+
+- **One file, two callers.** The Airflow task `export_starrocks` runs [`sql/starrocks/export.sql`](sql/starrocks/export.sql)
+  for one day, and `scripts/starrocks.sh export FROM TO` runs it for a range.
+- **Reloading a day is idempotent.** The export deletes the day and inserts it again.
+- **`check_starrocks` reconciles the day with Oracle from inside StarRocks**, which sees both sides.
+- **The catalog is created without `oracle.temporal.to-datetime`.** With it, StarRocks pushes the
+  date filter down as `timestamp '...'`. Oracle then converts the `DATE` column and scans every
+  partition. Without it the filter arrives as `date '...'` and one partition is read.
+
+Full history reconciles with Oracle, see [`docs/evidence/step-6-starrocks.txt`](docs/evidence/step-6-starrocks.txt):
+4.18 M transactions, amounts to the tiyn, distinct cards per month.
+Distinct cards for the first week of November: summing daily `card_cnt` gives 138 157, the
+bitmap gives 52 748, the same as `COUNT(DISTINCT)` in Oracle.
 
 ## Performance
 
@@ -118,7 +144,10 @@ py -3.12 -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 .venv/Scripts/python scripts/check_marts.py
 .venv/Scripts/python scripts/perf.py      # measurements for docs/performance.md (~2 min)
 .venv/Scripts/pytest                      # integration tests need the running Oracle
-docker compose up -d                      # + Airflow on http://localhost:8080 (no login, local only)
+docker compose --profile bi up -d         # + Airflow on http://localhost:8080 (no login, local only) and StarRocks
+bash scripts/starrocks.sh init            # JDBC catalog, tables, materialized views
+bash scripts/starrocks.sh export 2026-05-01 2026-10-31
+bash scripts/starrocks.sh check           # StarRocks vs Oracle
 docker exec bra-airflow airflow backfill create --dag-id bank_daily     --from-date 2026-11-01 --to-date 2026-11-07 --max-active-runs 1 --reprocess-behavior failed
 ```
 

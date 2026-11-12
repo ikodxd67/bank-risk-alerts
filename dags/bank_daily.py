@@ -1,13 +1,16 @@
-"""Ежедневная загрузка банка за день ds: источник → dds → витрины, с проверками качества.
+"""Ежедневная загрузка банка за день ds: источник → dds → витрины → StarRocks, с проверками.
 
 Вся логика — в PL/SQL-пакетах Oracle. DAG только ждёт источник, вызывает пакеты по
-порядку, проверяет результат и пишет в Telegram, если что-то упало.
+порядку, проверяет результат, выгружает день в StarRocks и пишет в Telegram, если что-то упало.
 """
 from contextlib import closing
 from datetime import date, datetime, timedelta
 from html import escape
+from pathlib import Path
 
+from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.providers.common.sql.sensors.sql import SqlSensor
+from airflow.providers.mysql.hooks.mysql import MySqlHook
 from airflow.providers.oracle.hooks.oracle import OracleHook
 from airflow.providers.telegram.hooks.telegram import TelegramHook
 from airflow.sdk import CronDataIntervalTimetable, dag, task
@@ -40,6 +43,24 @@ SELECT
 FROM dual"""
 
 
+# Тот же файл, что запускает scripts/starrocks.sh export; здесь обе границы — день запуска.
+EXPORT_SQL = (Path("/opt/airflow/sql/starrocks/export.sql").read_text(encoding="utf-8")
+              .replace("{{ d1 }}", "{{ ds }}").replace("{{ d2 }}", "{{ ds }}"))
+
+# Выполняется в StarRocks: он видит и свои таблицы, и Oracle через каталог.
+S = "'{{ ds }}'"
+DQ_STARROCKS = f"""
+SELECT
+  IF((SELECT IFNULL(SUM(trx_cnt), 0) FROM bank.trx_hourly WHERE trx_date = {S})
+   = (SELECT COUNT(*) FROM oracle_dwh.DWH.FCT_TRANSACTIONS WHERE TRX_DATE >= {S} AND TRX_DATE <= {S}), 1, 0) AS starrocks_trx_match_oracle,
+  IF((SELECT IFNULL(SUM(approved_amount), 0) FROM bank.turnover_daily WHERE report_date = {S})
+   = (SELECT IFNULL(SUM(approved_amount), 0) FROM bank.trx_hourly WHERE trx_date = {S}), 1, 0) AS starrocks_turnover_match_hourly,
+  IF((SELECT COUNT(*) FROM bank.fraud_alert WHERE alert_date = {S})
+   = (SELECT COUNT(*) FROM oracle_dwh.DWH.FRAUD_ALERT WHERE ALERT_DATE >= {S} AND ALERT_DATE <= {S}), 1, 0) AS starrocks_alerts_match_oracle,
+  IF((SELECT COUNT(*) FROM bank.loan_dpd WHERE snapshot_date = {S})
+   = (SELECT COUNT(*) FROM oracle_dwh.DWH.MART_LOAN_DPD WHERE SNAPSHOT_DATE >= {S} AND SNAPSHOT_DATE <= {S}), 1, 0) AS starrocks_dpd_match_oracle"""
+
+
 def notify_failure(context) -> None:
     ti = context["task_instance"]
     text = (f"❌ {ti.dag_id} за {context['ds']}: упала задача {ti.task_id} "
@@ -48,9 +69,10 @@ def notify_failure(context) -> None:
     print("сообщение о падении отправлено в Telegram")
 
 
-def run_checks(sql: str) -> None:
+def run_checks(sql: str, starrocks: bool = False) -> None:
     """Падает со списком не прошедших проверок."""
-    with closing(OracleHook(oracle_conn_id=CONN).get_conn()) as conn:
+    hook = MySqlHook(mysql_conn_id="starrocks") if starrocks else OracleHook(oracle_conn_id=CONN)
+    with closing(hook.get_conn()) as conn:
         cur = conn.cursor()
         cur.execute(sql)
         row = cur.fetchone()
@@ -80,7 +102,7 @@ def call(proc: str, ds: str) -> None:
         "retry_delay": timedelta(minutes=1),
         "on_failure_callback": notify_failure,
     },
-    tags=["bank", "oracle"],
+    tags=["bank", "oracle", "starrocks"],
 )
 def bank_daily():
     # Источник пишет день одной транзакцией, поэтому «есть строки» = «день пришёл целиком».
@@ -98,16 +120,24 @@ def bank_daily():
         call("pkg_dds.run_day", ds)
 
     @task
-    def check(sql: str):
+    def check(sql: str, starrocks: bool = False):
         # SQL приходит аргументом: Airflow подставляет {{ ds }} только в аргументы задачи
-        run_checks(sql)
+        run_checks(sql, starrocks)
 
     @task
     def build_marts(ds=None):
         call("pkg_marts.run_day", ds)
 
+    export_starrocks = SQLExecuteQueryOperator(
+        task_id="export_starrocks",
+        conn_id="starrocks",
+        sql=EXPORT_SQL,
+        split_statements=True,
+    )
+
     (wait_source >> load_dds() >> check.override(task_id="check_dds")(DQ_DDS)
-     >> build_marts() >> check.override(task_id="check_marts")(DQ_MARTS))
+     >> build_marts() >> check.override(task_id="check_marts")(DQ_MARTS)
+     >> export_starrocks >> check.override(task_id="check_starrocks")(DQ_STARROCKS, starrocks=True))
 
 
 bank_daily()
