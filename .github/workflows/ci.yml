@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# bash с pipefail: иначе «команда | tail» прячет код ошибки команды
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Быстро: тесты, которым не нужна база (генератор, разбор SQL-файлов).
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_generator.py tests/test_split_statements.py
+
+  # Весь путь с нуля на Oracle Free: источник → хранилище (PL/SQL) → витрины → все тесты.
+  # Заодно это проверка, что проект собирается из репозитория без ручных шагов.
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: Start Oracle Free
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait --wait-timeout 600 oracle
+      - name: Source system
+        run: |
+          bra migrate src
+          bra init
+          bra generate --start 2026-05-01 --end 2026-10-31 | tail -3
+          bra stats
+      - name: Warehouse (PL/SQL packages compile here)
+        run: |
+          bra migrate dwh
+          bra load --start 2024-05-01 --end 2026-10-31 | tail -3
+      - name: Marts
+        run: bra marts --start 2026-05-01 --end 2026-10-31 | tail -3
+      - name: Reconciliation and reports
+        run: |
+          python scripts/check_dwh.py
+          python scripts/check_marts.py
+      - name: Tests
+        # без базы интеграционные тесты пропускаются; здесь пропуск — ошибка
+        run: |
+          pytest -q -rs | tee pytest.out
+          ! grep -q "skipped" pytest.out
