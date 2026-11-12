@@ -188,7 +188,7 @@ It also covers plans before and after:
 Needs Docker with about 8 GB of memory and Python 3.12. The commands are for Linux, macOS and
 Git Bash; on Windows the venv scripts are in `.venv/Scripts/` instead of `.venv/bin/`.
 
-Oracle part (this is what CI runs, about 30 minutes for the full history):
+Oracle part (this is what CI runs; the full history took 20 and 34 minutes in the first two CI runs):
 
 ```bash
 cp .env.example .env                      # fill TG_BOT_TOKEN / TG_CHAT_ID for alerts
